@@ -25,6 +25,7 @@ from six import string_types as STRING_TYPES
 from six.moves import http_cookies  # NOQA: I202
 
 from falcon import DEFAULT_MEDIA_TYPE
+from falcon.headers import Headers
 from falcon.media import Handlers
 from falcon.response_helpers import (
     format_content_disposition,
@@ -145,9 +146,9 @@ class Response(object):
         'status',
         'stream',
         'stream_len',
+        'headers',
         '_cookies',
         '_data',
-        '_headers',
         '_media',
         '__dict__',
     )
@@ -157,7 +158,7 @@ class Response(object):
 
     def __init__(self, options=None):
         self.status = '200 OK'
-        self._headers = {}
+        self.headers = Headers()
 
         self.options = options if options else ResponseOptions()
 
@@ -186,11 +187,11 @@ class Response(object):
         if self._media is None:
             return None
 
-        if not self.content_type:
+        if not self.headers.content_type:
             self.content_type = self.options.default_media_type
 
         handler = self.options.media_handlers.find_by_media_type(
-            self.content_type,
+            self.headers.content_type,
             self.options.default_media_type
         )
 
@@ -198,17 +199,13 @@ class Response(object):
         # data() property is called multiple times.
         self._data = handler.serialize(
             self._media,
-            self.content_type
+            self.headers.content_type
         )
         return self._data
 
     @data.setter
     def data(self, value):
         self._data = value
-
-    @property
-    def headers(self):
-        return self._headers.copy()
 
     @property
     def media(self):
@@ -248,7 +245,8 @@ class Response(object):
         """
 
         self.stream = stream
-        self.stream_len = content_length  # NOTE(pshello): Deprecated in favor of `content_length`
+        # NOTE(pshello): Deprecated in favor of `content_length`
+        self.stream_len = content_length
 
     def set_cookie(self, name, value, expires=None, max_age=None,
                    domain=None, path=None, secure=None, http_only=True):
@@ -421,148 +419,6 @@ class Response(object):
         # thus removing it from future request objects.
         self._cookies[name]['expires'] = -1
 
-    def get_header(self, name, default=None):
-        """Retrieve the raw string value for the given header.
-
-        Args:
-            name (str): Header name, case-insensitive. Must be of type ``str``
-                or ``StringType``, and only character values 0x00 through 0xFF
-                may be used on platforms that use wide characters.
-        Keyword Args:
-            default: Value to return if the header
-                is not found (default ``None``).
-
-        Returns:
-            str: The value of the specified header if set, or
-            the default value if not set.
-        """
-        return self._headers.get(name.lower(), default)
-
-    def set_header(self, name, value):
-        """Set a header for this response to a given value.
-
-        Warning:
-            Calling this method overwrites the existing value, if any.
-
-        Warning:
-            For setting cookies, see instead :meth:`~.set_cookie`
-
-        Args:
-            name (str): Header name (case-insensitive). The restrictions
-                noted below for the header's value also apply here.
-            value (str): Value for the header. Must be convertable to
-                ``str`` or be of type ``str`` or
-                ``StringType``. Strings must contain only US-ASCII characters.
-                Under Python 2.x, the ``unicode`` type is also accepted,
-                although such strings are also limited to US-ASCII.
-        """
-
-        # NOTE(kgriffs): uwsgi fails with a TypeError if any header
-        # is not a str, so do the conversion here. It's actually
-        # faster to not do an isinstance check. str() will encode
-        # to US-ASCII.
-        name = str(name)
-        value = str(value)
-
-        # NOTE(kgriffs): normalize name by lowercasing it
-        self._headers[name.lower()] = value
-
-    def delete_header(self, name):
-        """Delete a header that was previously set for this response.
-
-        If the header was not previously set, nothing is done (no error is
-        raised).
-
-        Note that calling this method is equivalent to setting the
-        corresponding header property (when said property is available) to ``None``. For
-        example::
-
-            resp.etag = None
-
-        Args:
-            name (str): Header name (case-insensitive).  Must be of type
-                ``str`` or ``StringType`` and contain only US-ASCII characters.
-                Under Python 2.x, the ``unicode`` type is also accepted,
-                although such strings are also limited to US-ASCII.
-        """
-
-        # NOTE(kgriffs): normalize name by lowercasing it
-        self._headers.pop(name.lower(), None)
-
-    def append_header(self, name, value):
-        """Set or append a header for this response.
-
-        Warning:
-            If the header already exists, the new value will be appended
-            to it, delimited by a comma. Most header specifications support
-            this format, Set-Cookie being the notable exceptions.
-
-        Warning:
-            For setting cookies, see :py:meth:`~.set_cookie`
-
-        Args:
-            name (str): Header name (case-insensitive). The restrictions
-                noted below for the header's value also apply here.
-            value (str): Value for the header. Must be convertable to
-                ``str`` or be of type ``str`` or
-                ``StringType``. Strings must contain only US-ASCII characters.
-                Under Python 2.x, the ``unicode`` type is also accepted,
-                although such strings are also limited to US-ASCII.
-        """
-
-        # NOTE(kgriffs): uwsgi fails with a TypeError if any header
-        # is not a str, so do the conversion here. It's actually
-        # faster to not do an isinstance check. str() will encode
-        # to US-ASCII.
-        name = str(name)
-        value = str(value)
-
-        name = name.lower()
-        if name in self._headers:
-            value = self._headers[name] + ', ' + value
-
-        self._headers[name] = value
-
-    def set_headers(self, headers):
-        """Set several headers at once.
-
-        Warning:
-            Calling this method overwrites existing values, if any.
-
-        Args:
-            headers (dict or list): A dictionary of header names and values
-                to set, or a ``list`` of (*name*, *value*) tuples. Both *name*
-                and *value* must be of type ``str`` or ``StringType`` and
-                contain only US-ASCII characters. Under Python 2.x, the
-                ``unicode`` type is also accepted, although such strings are
-                also limited to US-ASCII.
-
-                Note:
-                    Falcon can process a list of tuples slightly faster
-                    than a dict.
-
-        Raises:
-            ValueError: `headers` was not a ``dict`` or ``list`` of ``tuple``.
-
-        """
-
-        if isinstance(headers, dict):
-            headers = headers.items()
-
-        # NOTE(kgriffs): We can't use dict.update because we have to
-        # normalize the header names.
-        _headers = self._headers
-
-        for name, value in headers:
-            # NOTE(kgriffs): uwsgi fails with a TypeError if any header
-            # is not a str, so do the conversion here. It's actually
-            # faster to not do an isinstance check. str() will encode
-            # to US-ASCII.
-            name = str(name)
-            value = str(value)
-
-            _headers[name.lower()] = value
-
     def add_link(self, target, rel, title=None, title_star=None,
                  anchor=None, hreflang=None, type_hint=None):
         """Add a link header to the response.
@@ -674,177 +530,14 @@ class Response(object):
         # is not a str, so do the conversion here. It's actually
         # faster to not do an isinstance check. str() will encode
         # to US-ASCII.
+        # NOTE(nateyo): Can probably handle this type of conversions inside of
+        # :class:`Headers`?
         value = str(value)
 
-        _headers = self._headers
-        if 'link' in _headers:
-            _headers['link'] += ', ' + value
+        if self.headers.exists("link"):
+            self.headers.append("link", value)
         else:
-            _headers['link'] = value
-
-    cache_control = header_property(
-        'Cache-Control',
-        """Set the Cache-Control header.
-
-        Used to set a list of cache directives to use as the value of the
-        Cache-Control header. The list will be joined with ", " to produce
-        the value for the header.
-
-        """,
-        format_header_value_list)
-
-    content_location = header_property(
-        'Content-Location',
-        """Set the Content-Location header.
-
-        This value will be URI encoded per RFC 3986. If the value that is
-        being set is already URI encoded it should be decoded first or the
-        header should be set manually using the set_header method.
-        """,
-        uri_encode)
-
-    content_length = header_property(
-        'Content-Length',
-        """Set the Content-Length header.
-
-        Useful for responding to HEAD requests when you aren't actually
-        providing the response body.
-
-        Note:
-            In cases where the response content is a stream (readable
-            file-like object), Falcon will not supply a Content-Length header
-            to the WSGI server unless `content_length` is explicitly set.
-            Consequently, the server may choose to use chunked encoding or one of the
-            other strategies suggested by PEP-3333.
-
-        """,
-    )
-
-    content_range = header_property(
-        'Content-Range',
-        """A tuple to use in constructing a value for the Content-Range header.
-
-        The tuple has the form (*start*, *end*, *length*, [*unit*]), where *start* and
-        *end* designate the range (inclusive), and *length* is the
-        total length, or '\\*' if unknown. You may pass ``int``'s for
-        these numbers (no need to convert to ``str`` beforehand). The optional value
-        *unit* describes the range unit and defaults to 'bytes'
-
-        Note:
-            You only need to use the alternate form, 'bytes \\*/1234', for
-            responses that use the status '416 Range Not Satisfiable'. In this
-            case, raising ``falcon.HTTPRangeNotSatisfiable`` will do the right
-            thing.
-
-        (See also: RFC 7233, Section 4.2)
-        """,
-        format_range)
-
-    content_type = header_property(
-        'Content-Type',
-        """Sets the Content-Type header.
-
-        The ``falcon`` module provides a number of constants for
-        common media types, including ``falcon.MEDIA_JSON``,
-        ``falcon.MEDIA_MSGPACK``, ``falcon.MEDIA_YAML``,
-        ``falcon.MEDIA_XML``, ``falcon.MEDIA_HTML``,
-        ``falcon.MEDIA_JS``, ``falcon.MEDIA_TEXT``,
-        ``falcon.MEDIA_JPEG``, ``falcon.MEDIA_PNG``,
-        and ``falcon.MEDIA_GIF``.
-        """)
-
-    downloadable_as = header_property(
-        'Content-Disposition',
-        """Set the Content-Disposition header using the given filename.
-
-        The value will be used for the *filename* directive. For example,
-        given ``'report.pdf'``, the Content-Disposition header would be set
-        to: ``'attachment; filename="report.pdf"'``.
-        """,
-        format_content_disposition)
-
-    etag = header_property(
-        'ETag',
-        """Set the ETag header.
-
-        The ETag header will be wrapped with double quotes ``"value"`` in case
-        the user didn't pass it.
-        """,
-        format_etag_header)
-
-    expires = header_property(
-        'Expires',
-        """Set the Expires header. Set to a ``datetime`` (UTC) instance.
-
-        Note:
-            Falcon will format the ``datetime`` as an HTTP date string.
-        """,
-        dt_to_http)
-
-    last_modified = header_property(
-        'Last-Modified',
-        """Set the Last-Modified header. Set to a ``datetime`` (UTC) instance.
-
-        Note:
-            Falcon will format the ``datetime`` as an HTTP date string.
-        """,
-        dt_to_http)
-
-    location = header_property(
-        'Location',
-        """Set the Location header.
-
-        This value will be URI encoded per RFC 3986. If the value that is
-        being set is already URI encoded it should be decoded first or the
-        header should be set manually using the set_header method.
-        """,
-        uri_encode)
-
-    retry_after = header_property(
-        'Retry-After',
-        """Set the Retry-After header.
-
-        The expected value is an integral number of seconds to use as the
-        value for the header. The HTTP-date syntax is not supported.
-        """,
-        str)
-
-    vary = header_property(
-        'Vary',
-        """Value to use for the Vary header.
-
-        Set this property to an iterable of header names. For a single
-        asterisk or field value, simply pass a single-element ``list``
-        or ``tuple``.
-
-        The "Vary" header field in a response describes what parts of
-        a request message, aside from the method, Host header field,
-        and request target, might influence the origin server's
-        process for selecting and representing this response.  The
-        value consists of either a single asterisk ("*") or a list of
-        header field names (case-insensitive).
-
-        (See also: RFC 7231, Section 7.1.4)
-        """,
-        format_header_value_list)
-
-    accept_ranges = header_property(
-        'Accept-Ranges',
-        """Set the Accept-Ranges header.
-
-        The Accept-Ranges header field indicates to the client which
-        range units are supported (e.g. "bytes") for the target
-        resource.
-
-        If range requests are not supported for the target resource,
-        the header may be set to "none" to advise the client not to
-        attempt any such requests.
-
-        Note:
-            "none" is the literal string, not Python's built-in ``None``
-            type.
-
-        """)
+            self.headers.add("link", value)
 
     def _set_media_type(self, media_type=None):
         """Wrapper around set_header to set a content-type.
@@ -858,10 +551,10 @@ class Response(object):
         # PERF(kgriffs): Using "in" like this is faster than using
         # dict.setdefault (tested on py27).
         set_content_type = (media_type is not None and
-                            'content-type' not in self._headers)
+                            not self.headers.exists('content-type'))
 
         if set_content_type:
-            self.set_header('content-type', media_type)
+            self.headers.add('content-type', media_type)
 
     def _wsgi_headers(self, media_type=None, py2=PY2):
         """Convert headers into the format expected by WSGI servers.
@@ -872,15 +565,8 @@ class Response(object):
 
         """
 
-        headers = self._headers
+        headers = self.headers.normalized()
         self._set_media_type(media_type)
-
-        if py2:
-            # PERF(kgriffs): Don't create an extra list object if
-            # it isn't needed.
-            items = headers.items()
-        else:
-            items = list(headers.items())
 
         if self._cookies is not None:
             # PERF(tbug):
@@ -891,9 +577,9 @@ class Response(object):
             #
             # Even without the .split("\\r\\n"), the below
             # is still ~17% faster, so don't use .output()
-            items += [('set-cookie', c.OutputString())
-                      for c in self._cookies.values()]
-        return items
+            headers += [('set-cookie', c.OutputString())
+                        for c in self._cookies.values()]
+        return headers
 
 
 class ResponseOptions(object):

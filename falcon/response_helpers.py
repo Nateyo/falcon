@@ -17,56 +17,14 @@
 import six
 
 
-def header_property(name, doc, transform=None):
-    """Create a header getter/setter.
-
-    Args:
-        name: Header name, e.g., "Content-Type"
-        doc: Docstring for the property
-        transform: Transformation function to use when setting the
-            property. The value will be passed to the function, and
-            the function should return the transformed value to use
-            as the value of the header (default ``None``).
-
-    """
-    normalized_name = name.lower()
-
-    def fget(self):
-        try:
-            return self._headers[normalized_name]
-        except KeyError:
-            return None
-
-    if transform is None:
-        def fset(self, value):
-            if value is None:
-                try:
-                    del self._headers[normalized_name]
-                except KeyError:
-                    pass
-            else:
-                self._headers[normalized_name] = str(value)
-    else:
-        def fset(self, value):
-            if value is None:
-                try:
-                    del self._headers[normalized_name]
-                except KeyError:
-                    pass
-            else:
-                self._headers[normalized_name] = transform(value)
-
-    def fdel(self):
-        del self._headers[normalized_name]
-
-    return property(fget, fset, fdel, doc)
-
-
 def format_range(value):
     """Format a range header tuple per the HTTP spec.
 
     Args:
         value: ``tuple`` passed to `req.range`
+
+    Returns:
+        str: Formatted content-disposition.
     """
 
     # PERF(kgriffs): % was found to be faster than str.format(),
@@ -86,28 +44,36 @@ def format_range(value):
 
 
 def format_content_disposition(value):
-    """Formats a Content-Disposition header given a filename."""
+    """
+    Formats a Content-Disposition header given a filename.
+
+    Args:
+        value (str): Filename, passed to `downloadable_as`
+
+    Returns:
+        str: Formatted content-disposition header
+    """
+
+    # PERF(nateyo): Surely, using '+' is slower than other methods?
 
     return 'attachment; filename="' + value + '"'
 
 
 def format_etag_header(value):
-    """Formats an ETag header, wrap it with " " in case of need."""
+    """
+    Formats an ETag header, wrap it with " " in case of need.
+
+    Args:
+        value (str): E-tag raw value
+
+    Returns:
+        str: Formatted ETag header
+    """
 
     if value[-1] != '\"':
         value = '\"' + value + '\"'
 
     return value
-
-
-if six.PY2:
-    def format_header_value_list(iterable):
-        """Join an iterable of strings with commas."""
-        return str(', '.join(iterable))
-else:
-    def format_header_value_list(iterable):
-        """Join an iterable of strings with commas."""
-        return ', '.join(iterable)
 
 
 def is_ascii_encodable(s):
